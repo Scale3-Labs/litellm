@@ -64,6 +64,7 @@ from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse import LangFuseLogger
 from ..integrations.langsmith import LangsmithLogger
+from ..integrations.langtrace import LangtraceLogger
 from ..integrations.litedebugger import LiteDebugger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
@@ -93,6 +94,7 @@ logfireLogger = None
 weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
+langtraceLogger = None
 openMeterLogger = None
 lagoLogger = None
 dataDogLogger = None
@@ -269,7 +271,7 @@ class Logging:
                 key_index = api_base.find("key=") + 4
                 # Mask the last 5 characters after "key="
                 masked_api_base = (
-                    api_base[:key_index] + "*" * 5 + api_base[key_index + 5 :]
+                    api_base[:key_index] + "*" * 5 + api_base[key_index + 5:]
                 )
             else:
                 masked_api_base = api_base
@@ -892,6 +894,38 @@ class Logging:
                                     service_name="langfuse",
                                     trace_id=_trace_id,
                                 )
+                    if callback == "langtrace":
+                        deep_copy = {}
+                        verbose_logger.debug(
+                            f"Callback is LANGTRACE, model_call_details: {self.model_call_details}"
+                        )
+
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            verbose_logger.debug(
+                                f"prometheus: is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
+                            )
+                            if complete_streaming_response is None:
+                                continue
+                            else:
+                                print_verbose(
+                                    "reaches langtrace for streaming logging!"
+                                )
+                                result = kwargs["complete_streaming_response"]
+                        # global langtraceLogger
+                        # langtraceLogger.log_event(
+                        #     kwargs=deep_copy,
+                        #     response_obj=result,
+                        #     start_time=start_time,
+                        #     end_time=end_time,
+                        #     user_id=kwargs.get("user", None),
+                        #     print_verbose=print_verbose,
+                        # )
                     if callback == "datadog":
                         global dataDogLogger
                         verbose_logger.debug("reaches datadog for success logging!")
@@ -1839,7 +1873,7 @@ def set_callbacks(callback_list, function_id=None):
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, langtraceLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
@@ -1907,6 +1941,8 @@ def set_callbacks(callback_list, function_id=None):
                 langFuseLogger = LangFuseLogger(
                     langfuse_public_key=None, langfuse_secret=None, langfuse_host=None
                 )
+            elif callback == "langtrace":
+                langtraceLogger = LangtraceLogger()
             elif callback == "openmeter":
                 openMeterLogger = OpenMeterLogger()
             elif callback == "datadog":
@@ -1987,6 +2023,14 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "langtrace":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, LangtraceLogger):
+                return callback  # type: ignore
+
+        langtrace_logger = LangtraceLogger()
+        _in_memory_loggers.append(langtrace_logger)
+        return langtrace_logger  # type: ignore
     elif logging_integration == "arize":
         if "ARIZE_SPACE_KEY" not in os.environ:
             raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
@@ -2100,6 +2144,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "langsmith":
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
+                return callback
+    elif logging_integration == "langtrace":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, LangtraceLogger):
                 return callback
     elif logging_integration == "otel":
         from litellm.integrations.opentelemetry import OpenTelemetry
